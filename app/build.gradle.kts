@@ -14,12 +14,19 @@ android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
+  val ciVersionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull() ?: 1
+  val ciVersionName = System.getenv("APP_VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "1.0"
+  val ciGithubRepo = (System.getenv("GITHUB_REPOSITORY") ?: "")
+    .trim()
+    .replace("\"", "")
+
   defaultConfig {
     applicationId = "com.aistudio.mescartes.frwlt"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = ciVersionCode
+    versionName = ciVersionName
+    buildConfigField("String", "GITHUB_REPO", "\"$ciGithubRepo\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

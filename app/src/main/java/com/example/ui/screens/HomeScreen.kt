@@ -42,6 +42,8 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.QrCodeScanner
@@ -50,10 +52,12 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SettingsBackupRestore
 import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
@@ -88,13 +92,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
 import com.example.R
+import com.example.data.AppUpdateInfo
 import com.example.data.BackupPayload
 import com.example.model.CardCategory
 import com.example.model.LoyaltyCard
@@ -120,13 +127,17 @@ fun HomeScreen(
     sharedTransitionScope: SharedTransitionScope,
     animatedVisibilityScope: AnimatedVisibilityScope
 ) {
+    val context = LocalContext.current
     val uiState by viewModel.homeUiState.collectAsStateWithLifecycle()
+    val availableUpdate by viewModel.availableUpdate.collectAsStateWithLifecycle()
+    val isCheckingUpdate by viewModel.isCheckingUpdate.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     var showBackupSheet by remember { mutableStateOf(false) }
     var pendingImportPayload by remember { mutableStateOf<BackupPayload?>(null) }
     var pendingDeleteCard by remember { mutableStateOf<LoyaltyCard?>(null) }
     var showClearAllConfirm by remember { mutableStateOf(false) }
+    var showUpdateRepoDialog by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
@@ -152,6 +163,9 @@ fun HomeScreen(
                 }
                 is WalletUiEvent.PromptBackupImport -> {
                     pendingImportPayload = event.payload
+                }
+                WalletUiEvent.PromptUpdateRepoSetup -> {
+                    showUpdateRepoDialog = true
                 }
             }
         }
@@ -550,6 +564,47 @@ fun HomeScreen(
                         .testTag("import_backup_item")
                 )
 
+                Spacer(modifier = Modifier.height(6.dp))
+
+                ListItem(
+                    headlineContent = { Text("Vérifier les mises à jour", fontWeight = FontWeight.SemiBold) },
+                    supportingContent = {
+                        Text("Version installée : v${BuildConfig.VERSION_NAME}")
+                    },
+                    leadingContent = {
+                        if (isCheckingUpdate) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Rounded.SystemUpdate,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    },
+                    trailingContent = {
+                        TextButton(
+                            onClick = {
+                                showBackupSheet = false
+                                showUpdateRepoDialog = true
+                            }
+                        ) {
+                            Text("Source")
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
+                            showBackupSheet = false
+                            viewModel.checkForUpdatesManually()
+                        }
+                        .testTag("check_updates_item")
+                )
+
                 HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
 
                 Row(
@@ -657,6 +712,160 @@ fun HomeScreen(
             }
         )
     }
+
+    availableUpdate?.let { update ->
+        AppUpdateDialog(
+            update = update,
+            onDownloadAndInstall = {
+                viewModel.dismissAvailableUpdate(rememberDismissed = false)
+                runCatching {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(update.apkDownloadUrl)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                }.onFailure {
+                    viewModel.emitMessage("Impossible d'ouvrir le lien de téléchargement.")
+                }
+            },
+            onDismissLater = {
+                viewModel.dismissAvailableUpdate(rememberDismissed = true)
+            }
+        )
+    }
+
+    if (showUpdateRepoDialog) {
+        UpdateRepoConfigDialog(
+            initialValue = viewModel.getConfiguredUpdateRepo(),
+            onDismiss = { showUpdateRepoDialog = false },
+            onSave = { rawInput ->
+                showUpdateRepoDialog = false
+                viewModel.saveUpdateRepoAndCheck(rawInput)
+            }
+        )
+    }
+}
+
+@Composable
+private fun AppUpdateDialog(
+    update: AppUpdateInfo,
+    onDownloadAndInstall: () -> Unit,
+    onDismissLater: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismissLater,
+        icon = {
+            Icon(
+                imageVector = Icons.Rounded.SystemUpdate,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp)
+            )
+        },
+        title = {
+            Text(
+                text = "Mise à jour disponible (v${update.versionName})",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Une nouvelle version de Mes Cartes est prête.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (update.releaseNotes.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = update.releaseNotes,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = if (update.hasDirectApkAsset) {
+                        "Appuyez sur le bouton ci-dessous pour télécharger le fichier, puis touchez « Ouvrir » et « Mettre à jour »."
+                    } else {
+                        "Appuyez ci-dessous pour ouvrir la nouvelle version et la télécharger."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDownloadAndInstall,
+                modifier = Modifier.testTag("download_update_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Download,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Télécharger et installer")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismissLater) {
+                Text("Plus tard")
+            }
+        }
+    )
+}
+
+@Composable
+private fun UpdateRepoConfigDialog(
+    initialValue: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var repoText by remember { mutableStateOf(initialValue) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Source des mises à jour") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Indiquez votre dépôt GitHub public (rempli automatiquement quand l'APK est compilé via GitHub Actions) :",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = repoText,
+                    onValueChange = { repoText = it },
+                    label = { Text("Dépôt GitHub") },
+                    placeholder = { Text("ex. pseudo/mes-cartes") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("update_repo_input")
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(repoText) },
+                enabled = repoText.isNotBlank()
+            ) {
+                Text("Vérifier")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Annuler")
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalSharedTransitionApi::class)

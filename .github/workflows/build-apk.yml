@@ -7,20 +7,34 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     name: Build APK Debug
     runs-on: ubuntu-latest
+    env:
+      APP_VERSION_CODE: ${{ 10 + github.run_number }}
+      APP_VERSION_NAME: 1.${{ github.run_number }}
 
     steps:
       - name: Récupérer le code
         uses: actions/checkout@v4
 
       - name: Installer Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
+
+      - name: Configurer le SDK Android
+        uses: android-actions/setup-android@v3
+
+      - name: Accepter les licences Android SDK
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" || true
 
       - name: Restaurer le keystore de signature debug
         run: base64 -d debug.keystore.base64 > debug.keystore
@@ -31,11 +45,25 @@ jobs:
           gradle-version: "9.3.1"
 
       - name: Compiler l'APK
-        run: gradle :app:assembleDebug --no-daemon
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Publier l'APK téléchargeable
+      - name: Préparer l'APK versionné
+        run: cp app/build/outputs/apk/debug/app-debug.apk "MesCartes-v${APP_VERSION_NAME}.apk"
+
+      - name: Publier l'APK en artefact
         uses: actions/upload-artifact@v4
         with:
           name: mes-cartes-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: MesCartes-v${{ env.APP_VERSION_NAME }}.apk
           if-no-files-found: error
+
+      - name: Publier la Release GitHub (mise à jour dans l'appli)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.APP_VERSION_NAME }}-build.${{ env.APP_VERSION_CODE }}
+          name: Mes Cartes v${{ env.APP_VERSION_NAME }}
+          body: |
+            Nouvelle version compilée automatiquement (build ${{ env.APP_VERSION_CODE }}).
+            Ouvrez l'application Mes Cartes pour télécharger et installer la mise à jour en un clic.
+          files: MesCartes-v${{ env.APP_VERSION_NAME }}.apk
+          make_latest: true

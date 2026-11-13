@@ -4,10 +4,13 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.room.Room
 import com.example.data.AppDatabase
+import com.example.data.AppUpdateChecker
 import com.example.data.BackupCardDto
 import com.example.data.BackupPayload
 import com.example.data.BrandSuggestionHelper
 import com.example.data.DemoCards
+import com.example.data.GitHubReleaseAssetDto
+import com.example.data.GitHubReleaseDto
 import com.example.data.LoyaltyCardRepository
 import com.example.data.StoreLogoFetcher
 import com.example.data.sync.SharedLoyaltyCard
@@ -296,5 +299,45 @@ class ExampleRobolectricTest {
         assertFalse(isStoreNameConfirmationMatch("E.Leclerc", ""))
         assertFalse(isStoreNameConfirmationMatch("E.Leclerc", "Leclerc"))
         assertFalse(isStoreNameConfirmationMatch("Carrefour", "Auchan"))
+    }
+
+    @Test
+    fun `app update checker normalizes github repo urls and detects newer apk releases`() {
+        assertEquals("steph/mes-cartes", AppUpdateChecker.normalizeRepoSlug("steph/mes-cartes"))
+        assertEquals("steph/mes-cartes", AppUpdateChecker.normalizeRepoSlug("https://github.com/steph/mes-cartes/"))
+        assertEquals("steph/mes-cartes", AppUpdateChecker.normalizeRepoSlug("https://github.com/steph/mes-cartes.git"))
+        assertEquals(null, AppUpdateChecker.normalizeRepoSlug("pas-un-depot"))
+
+        val (vName, bCode) = AppUpdateChecker.parseReleaseTag("v1.12-build.22")
+        assertEquals("1.12", vName)
+        assertEquals(22, bCode)
+
+        val newerDto = GitHubReleaseDto(
+            tagName = "v1.12-build.22",
+            body = "Nouvelle version",
+            htmlUrl = "https://github.com/steph/mes-cartes/releases/tag/v1.12-build.22",
+            assets = listOf(
+                GitHubReleaseAssetDto(
+                    name = "MesCartes-v1.12.apk",
+                    browserDownloadUrl = "https://github.com/steph/mes-cartes/releases/download/v1.12-build.22/MesCartes-v1.12.apk"
+                )
+            )
+        )
+        val parsedNewer = AppUpdateChecker.parseReleaseDto(
+            dto = newerDto,
+            currentVersionName = "1.1",
+            currentVersionCode = 11
+        )
+        assertNotNull(parsedNewer)
+        assertEquals("1.12", parsedNewer!!.versionName)
+        assertTrue(parsedNewer.hasDirectApkAsset)
+        assertTrue(parsedNewer.apkDownloadUrl.endsWith(".apk"))
+
+        val sameOrOlder = AppUpdateChecker.parseReleaseDto(
+            dto = newerDto,
+            currentVersionName = "1.12",
+            currentVersionCode = 22
+        )
+        assertEquals(null, sameOrOlder)
     }
 }

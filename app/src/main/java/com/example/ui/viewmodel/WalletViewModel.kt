@@ -4,9 +4,13 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.data.AppDatabase
+import com.example.data.AppUpdateChecker
+import com.example.data.AppUpdateInfo
 import com.example.data.BackupPayload
 import com.example.data.LoyaltyCardRepository
+import com.example.data.UpdateCheckResult
 import com.example.model.CardCategory
 import com.example.model.LoyaltyCard
 import com.example.model.SortOption
@@ -39,6 +43,7 @@ data class HomeUiState(
 sealed interface WalletUiEvent {
     data class ShowMessage(val message: String) : WalletUiEvent
     data class PromptBackupImport(val payload: BackupPayload) : WalletUiEvent
+    data object PromptUpdateRepoSetup : WalletUiEvent
 }
 
 class WalletViewModel(application: Application) : AndroidViewModel(application) {
@@ -48,11 +53,18 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
         context = appContext,
         dao = AppDatabase.getInstance(appContext).loyaltyCardDao()
     )
+    private val updateChecker: AppUpdateChecker = AppUpdateChecker(appContext)
 
     private val _searchQuery = MutableStateFlow("")
     private val _selectedCategory = MutableStateFlow<CardCategory?>(null)
     private val _sortOption = MutableStateFlow(SortOption.USAGE)
     private val _isInitialized = MutableStateFlow(false)
+
+    private val _availableUpdate = MutableStateFlow<AppUpdateInfo?>(null)
+    val availableUpdate: StateFlow<AppUpdateInfo?> = _availableUpdate.asStateFlow()
+
+    private val _isCheckingUpdate = MutableStateFlow(false)
+    val isCheckingUpdate: StateFlow<Boolean> = _isCheckingUpdate.asStateFlow()
 
     private val _events = MutableSharedFlow<WalletUiEvent>()
     val events: SharedFlow<WalletUiEvent> = _events.asSharedFlow()
@@ -110,6 +122,16 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
             repository.seedDemoIfFirstLaunch()
             _isInitialized.value = true
             syncExternalSurfaces()
+        }
+        viewModelScope.launch {
+            if (updateChecker.shouldAutoCheckNow()) {
+                when (val result = updateChecker.checkForUpdates(force = false)) {
+                    is UpdateCheckResult.UpdateAvailable -> {
+                        _availableUpdate.value = result.info
+                    }
+                    else -> Unit
+                }
+            }
         }
     }
 
@@ -290,6 +312,51 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             _events.emit(WalletUiEvent.ShowMessage(message))
         }
+    }
+
+    fun getConfiguredUpdateRepo(): String = updateChecker.getConfiguredRepoSlug().orEmpty()
+
+    fun checkForUpdatesManually() {
+        if (_isCheckingUpdate.value) return
+        viewModelScope.launch {
+            _isCheckingUpdate.value = true
+            when (val result = updateChecker.checkForUpdates(force = true)) {
+                is UpdateCheckResult.UpdateAvailable -> {
+                    _availableUpdate.value = result.info
+                }
+                UpdateCheckResult.UpToDate -> {
+                    _events.emit(
+                        WalletUiEvent.ShowMessage(
+                            "Votre application est à jour (v${BuildConfig.VERSION_NAME})."
+                        )
+                    )
+                }
+                UpdateCheckResult.MissingRepoConfig -> {
+                    _events.emit(WalletUiEvent.PromptUpdateRepoSetup)
+                }
+                is UpdateCheckResult.Error -> {
+                    _events.emit(WalletUiEvent.ShowMessage(result.message))
+                }
+            }
+            _isCheckingUpdate.value = false
+        }
+    }
+
+    fun dismissAvailableUpdate(rememberDismissed: Boolean = true) {
+        val current = _availableUpdate.value
+        _availableUpdate.value = null
+        if (rememberDismissed && current != null) {
+            updateChecker.dismissUpdateTag(current.tagName)
+        }
+    }
+
+    fun saveUpdateRepoAndCheck(rawInput: String) {
+        val normalized = updateChecker.saveCustomRepoSlug(rawInput)
+        if (normalized == null) {
+            emitMessage("Format invalide. Exemple : utilisateur/mes-cartes ou URL GitHub.")
+            return
+        }
+        checkForUpdatesManually()
     }
 
     private suspend fun syncExternalSurfaces() {
