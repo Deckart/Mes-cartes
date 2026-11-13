@@ -30,13 +30,12 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Configurer le SDK Android
-        uses: android-actions/setup-android@v3
-
-      - name: Accepter les licences Android SDK
+      - name: Accepter les licences et préparer le SDK Android
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" || true
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-36.1" "build-tools;36.0.0" || "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" || true
 
       - name: Restaurer le keystore de signature debug
         run: base64 -d debug.keystore.base64 > debug.keystore
