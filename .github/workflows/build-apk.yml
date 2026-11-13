@@ -57,6 +57,19 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+      - name: Restaurer google-services.json (si configuré en secret)
+        env:
+          SECRET_GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ ! -f app/google-services.json ] && [ -n "$SECRET_GOOGLE_SERVICES_JSON" ]; then
+            trimmed="$(printf '%s' "$SECRET_GOOGLE_SERVICES_JSON" | sed 's/^[[:space:]]*//')"
+            if [[ "$trimmed" == \{* ]]; then
+              printf '%s' "$SECRET_GOOGLE_SERVICES_JSON" > app/google-services.json
+            else
+              printf '%s' "$SECRET_GOOGLE_SERVICES_JSON" | tr -d '\n\r ' | base64 -d > app/google-services.json
+            fi
+          fi
+
       - name: Configurer Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:

@@ -15,7 +15,6 @@ import androidx.credentials.exceptions.GetCredentialInterruptedException
 import androidx.credentials.exceptions.GetCredentialProviderConfigurationException
 import androidx.credentials.exceptions.GetCredentialUnsupportedException
 import androidx.credentials.exceptions.NoCredentialException
-import com.example.R
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -51,6 +50,17 @@ internal tailrec fun Context.findActivity(): Activity? = when (this) {
 
 object GoogleAuthHelper {
 
+    @Suppress("DiscouragedApi")
+    private fun resolveWebClientId(context: Context): String? {
+        val resId = context.resources.getIdentifier(
+            "default_web_client_id",
+            "string",
+            context.packageName
+        )
+        if (resId == 0) return null
+        return runCatching { context.getString(resId) }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
     fun attemptAutoSignIn(
         context: Context,
         credentialManager: CredentialManager,
@@ -62,9 +72,8 @@ object GoogleAuthHelper {
             onAuthSuccess()
             return
         }
-        val clientId = try {
-            context.getString(R.string.default_web_client_id)
-        } catch (e: Exception) {
+        val clientId = resolveWebClientId(context)
+        if (clientId == null) {
             onUnauthenticated()
             return
         }
@@ -107,10 +116,9 @@ object GoogleAuthHelper {
         onAuthCancelled: () -> Unit = {},
         onNoCredentials: (() -> Unit)? = null
     ) {
-        val clientId = try {
-            context.getString(R.string.default_web_client_id)
-        } catch (e: Exception) {
-            onAuthError("Configuration Google Sign-In introuvable.")
+        val clientId = resolveWebClientId(context)
+        if (clientId == null) {
+            onAuthError("Configuration Google Sign-In introuvable (google-services.json manquant dans ce build).")
             return
         }
 
