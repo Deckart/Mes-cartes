@@ -45,8 +45,10 @@ class ExampleRobolectricTest {
     @Test
     fun `all demo cards generate crisp barcodes without fallback`() {
         val demoCards = DemoCards.createSampleCards()
-        assertEquals(6, demoCards.size)
+        assertEquals(2, demoCards.size)
         demoCards.forEach { card ->
+            assertFalse("Demo card ${card.storeName} should be a single short word", card.storeName.contains(' '))
+            assertTrue("Demo card ${card.storeName} should be short", card.storeName.length <= 6)
             val result = BarcodeGenerator.generateBarcodeBitmap(
                 content = card.barcodeValue,
                 formatType = card.barcodeFormat,
