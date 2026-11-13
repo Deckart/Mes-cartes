@@ -38,7 +38,6 @@ data class HomeUiState(
 
 sealed interface WalletUiEvent {
     data class ShowMessage(val message: String) : WalletUiEvent
-    data class ShowUndoDelete(val card: LoyaltyCard) : WalletUiEvent
     data class PromptBackupImport(val payload: BackupPayload) : WalletUiEvent
 }
 
@@ -57,9 +56,6 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _events = MutableSharedFlow<WalletUiEvent>()
     val events: SharedFlow<WalletUiEvent> = _events.asSharedFlow()
-
-    private val _pendingUndoCard = MutableStateFlow<LoyaltyCard?>(null)
-    val pendingUndoCard: StateFlow<LoyaltyCard?> = _pendingUndoCard.asStateFlow()
 
     val homeUiState: StateFlow<HomeUiState> = combine(
         repository.allCards,
@@ -138,9 +134,9 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
             val previous = if (card.id != 0L) repository.getCardById(card.id) else null
             val updated = card.copy(updatedAt = System.currentTimeMillis())
             if (previous != null && previous.isSynced && !updated.isSynced) {
-                PendingSyncStore.markRemovedOrPrivatized(previous.remoteId)
+                repository.addPendingRemoteRemoval(previous.remoteId)
             } else if (updated.isSynced && !updated.remoteId.isNullOrBlank()) {
-                PendingSyncStore.unmarkRemoved(updated.remoteId)
+                repository.clearPendingRemoteRemoval(updated.remoteId)
             }
             val savedId = repository.upsertCard(updated)
             syncExternalSurfaces()
@@ -152,9 +148,9 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val nextSynced = !card.isSynced
             if (card.isSynced && !nextSynced) {
-                PendingSyncStore.markRemovedOrPrivatized(card.remoteId)
+                repository.addPendingRemoteRemoval(card.remoteId)
             } else if (nextSynced && !card.remoteId.isNullOrBlank()) {
-                PendingSyncStore.unmarkRemoved(card.remoteId)
+                repository.clearPendingRemoteRemoval(card.remoteId)
             }
             repository.upsertCard(
                 card.copy(
@@ -182,43 +178,18 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun deleteCardWithUndo(card: LoyaltyCard) {
+    fun deleteCardPermanently(card: LoyaltyCard, onDeleted: () -> Unit = {}) {
         viewModelScope.launch {
-            _pendingUndoCard.value = card
-            if (card.isSynced) {
-                PendingSyncStore.markRemovedOrPrivatized(card.remoteId)
-            }
-            repository.deleteCard(card)
+            repository.deleteCard(card, deleteMediaFiles = true)
             syncExternalSurfaces()
-            _events.emit(WalletUiEvent.ShowUndoDelete(card))
-        }
-    }
-
-    fun undoLastDelete() {
-        val card = _pendingUndoCard.value ?: return
-        _pendingUndoCard.value = null
-        viewModelScope.launch {
-            if (card.isSynced) {
-                PendingSyncStore.unmarkRemoved(card.remoteId)
-            }
-            repository.restoreDeletedCard(card)
-            syncExternalSurfaces()
+            _events.emit(WalletUiEvent.ShowMessage("Carte « ${card.storeName} » supprimée."))
+            onDeleted()
         }
     }
 
     fun refreshExternalSurfaces() {
         viewModelScope.launch {
             syncExternalSurfaces()
-        }
-    }
-
-    fun commitPendingDeleteIfAny() {
-        val card = _pendingUndoCard.value ?: return
-        _pendingUndoCard.value = null
-        viewModelScope.launch {
-            repository.deleteLogoFile(card.logoPath)
-            repository.deletePhotoFile(card.frontPhotoPath)
-            repository.deletePhotoFile(card.backPhotoPath)
         }
     }
 

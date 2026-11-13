@@ -68,10 +68,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -101,6 +99,8 @@ import com.example.data.BackupPayload
 import com.example.model.CardCategory
 import com.example.model.LoyaltyCard
 import com.example.model.SortOption
+import com.example.ui.components.ClearAllCardsConfirmationDialog
+import com.example.ui.components.DeleteCardConfirmationDialog
 import com.example.ui.components.LoyaltyCardVisual
 import com.example.ui.viewmodel.WalletUiEvent
 import com.example.ui.viewmodel.WalletViewModel
@@ -125,6 +125,7 @@ fun HomeScreen(
 
     var showBackupSheet by remember { mutableStateOf(false) }
     var pendingImportPayload by remember { mutableStateOf<BackupPayload?>(null) }
+    var pendingDeleteCard by remember { mutableStateOf<LoyaltyCard?>(null) }
     var showClearAllConfirm by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -148,19 +149,6 @@ fun HomeScreen(
             when (event) {
                 is WalletUiEvent.ShowMessage -> {
                     snackbarHostState.showSnackbar(event.message)
-                }
-                is WalletUiEvent.ShowUndoDelete -> {
-                    val result = snackbarHostState.showSnackbar(
-                        message = "Carte « ${event.card.storeName} » supprimée",
-                        actionLabel = "Annuler",
-                        withDismissAction = true,
-                        duration = SnackbarDuration.Long
-                    )
-                    if (result == SnackbarResult.ActionPerformed) {
-                        viewModel.undoLastDelete()
-                    } else {
-                        viewModel.commitPendingDeleteIfAny()
-                    }
                 }
                 is WalletUiEvent.PromptBackupImport -> {
                     pendingImportPayload = event.payload
@@ -439,7 +427,7 @@ fun HomeScreen(
                                 card = card,
                                 isTopFavorite = uiState.sortOption == SortOption.USAGE && index < 2 && card.usageCount > 0,
                                 onClick = { onCardClick(card.id) },
-                                onSwipeDelete = { viewModel.deleteCardWithUndo(card) },
+                                onSwipeDelete = { pendingDeleteCard = card },
                                 sharedTransitionScope = sharedTransitionScope,
                                 animatedVisibilityScope = animatedVisibilityScope
                             )
@@ -649,29 +637,23 @@ fun HomeScreen(
         )
     }
 
+    pendingDeleteCard?.let { cardToDelete ->
+        DeleteCardConfirmationDialog(
+            card = cardToDelete,
+            onDismiss = { pendingDeleteCard = null },
+            onConfirmDelete = {
+                pendingDeleteCard = null
+                viewModel.deleteCardPermanently(cardToDelete)
+            }
+        )
+    }
+
     if (showClearAllConfirm) {
-        AlertDialog(
-            onDismissRequest = { showClearAllConfirm = false },
-            title = { Text("Vider le portefeuille ?") },
-            text = { Text("Toutes vos cartes enregistrées seront supprimées de cet appareil.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.clearAllCards()
-                        showClearAllConfirm = false
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
-                ) {
-                    Text("Tout supprimer")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearAllConfirm = false }) {
-                    Text("Annuler")
-                }
+        ClearAllCardsConfirmationDialog(
+            onDismiss = { showClearAllConfirm = false },
+            onConfirmClearAll = {
+                showClearAllConfirm = false
+                viewModel.clearAllCards()
             }
         )
     }
@@ -691,10 +673,9 @@ private fun SwipeableLoyaltyCardItem(
         confirmValueChange = { value ->
             if (value == SwipeToDismissBoxValue.EndToStart || value == SwipeToDismissBoxValue.StartToEnd) {
                 onSwipeDelete()
-                true
-            } else {
-                false
             }
+            // Toujours revenir en place jusqu'à confirmation en saisissant le nom du magasin
+            false
         }
     )
 

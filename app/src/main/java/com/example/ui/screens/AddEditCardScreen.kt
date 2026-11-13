@@ -40,6 +40,7 @@ import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.ImageSearch
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.Lock
@@ -93,6 +94,7 @@ import com.example.model.BarcodeFormatType
 import com.example.model.CardCategory
 import com.example.model.LoyaltyCard
 import com.example.ui.components.BarcodeScannerView
+import com.example.ui.components.DeleteCardConfirmationDialog
 import com.example.ui.components.MiniBarcodePreview
 import com.example.ui.theme.CardBrandPalette
 import com.example.ui.viewmodel.WalletViewModel
@@ -141,6 +143,7 @@ fun AddEditCardScreen(
     var userCustomizedCategory by remember { mutableStateOf(editingCardId != null) }
     var storeNameError by remember { mutableStateOf(false) }
     var barcodeError by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(editingCardId) {
         if (editingCardId != null) {
@@ -318,6 +321,20 @@ fun AddEditCardScreen(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = "Retour"
                         )
+                    }
+                },
+                actions = {
+                    if (existingCard != null) {
+                        IconButton(
+                            onClick = { showDeleteConfirm = true },
+                            modifier = Modifier.testTag("add_edit_delete_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.DeleteOutline,
+                                contentDescription = "Supprimer la carte",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
                     }
                 }
             )
@@ -909,6 +926,19 @@ fun AddEditCardScreen(
                 Spacer(modifier = Modifier.height(20.dp))
             }
         }
+    }
+
+    val cardToDelete = existingCard
+    if (showDeleteConfirm && cardToDelete != null) {
+        DeleteCardConfirmationDialog(
+            card = cardToDelete,
+            onDismiss = { showDeleteConfirm = false },
+            onConfirmDelete = {
+                showDeleteConfirm = false
+                viewModel.deleteCardPermanently(cardToDelete)
+                onBack()
+            }
+        )
     }
 }
 

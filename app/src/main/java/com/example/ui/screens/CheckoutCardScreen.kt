@@ -92,6 +92,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.model.LoyaltyCard
+import com.example.ui.components.DeleteCardConfirmationDialog
 import com.example.ui.components.HighContrastBarcodeCard
 import com.example.ui.viewmodel.WalletUiEvent
 import com.example.ui.viewmodel.WalletViewModel
@@ -630,29 +631,13 @@ fun CheckoutCardScreen(
     }
 
     if (showDeleteConfirm) {
-        AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Supprimer « ${card.storeName} » ?") },
-            text = { Text("Cette carte sera retirée de votre portefeuille.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showDeleteConfirm = false
-                        viewModel.deleteCardWithUndo(card)
-                        onBack()
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
-                ) {
-                    Text("Supprimer")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
-                    Text("Annuler")
-                }
+        DeleteCardConfirmationDialog(
+            card = card,
+            onDismiss = { showDeleteConfirm = false },
+            onConfirmDelete = {
+                showDeleteConfirm = false
+                viewModel.deleteCardPermanently(card)
+                onBack()
             }
         )
     }

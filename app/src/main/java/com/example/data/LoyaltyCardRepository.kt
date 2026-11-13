@@ -82,6 +82,7 @@ class LoyaltyCardRepository(
     }
 
     suspend fun resetDemoCards() {
+        recordSyncedCardsAsPendingRemoval()
         clearAllPhotos()
         clearAllLogos()
         dao.deleteAllCards()
@@ -90,6 +91,7 @@ class LoyaltyCardRepository(
     }
 
     suspend fun clearAllCards() {
+        recordSyncedCardsAsPendingRemoval()
         clearAllPhotos()
         clearAllLogos()
         dao.deleteAllCards()
@@ -102,6 +104,9 @@ class LoyaltyCardRepository(
         } else {
             card
         }
+        if (normalized.isSynced && !normalized.remoteId.isNullOrBlank()) {
+            clearPendingRemoteRemoval(normalized.remoteId)
+        }
         return if (normalized.id == 0L) {
             dao.insertCard(normalized)
         } else {
@@ -110,11 +115,29 @@ class LoyaltyCardRepository(
         }
     }
 
-    suspend fun deleteCard(card: LoyaltyCard) {
-        dao.deleteCard(card)
+    suspend fun deleteCard(card: LoyaltyCard, deleteMediaFiles: Boolean = true) {
+        if (card.isSynced && !card.remoteId.isNullOrBlank()) {
+            addPendingRemoteRemoval(card.remoteId)
+        }
+        if (card.id != 0L) {
+            dao.deleteCardById(card.id)
+        } else {
+            dao.deleteCard(card)
+        }
+        if (!card.remoteId.isNullOrBlank()) {
+            dao.deleteCardByRemoteId(card.remoteId)
+        }
+        if (deleteMediaFiles) {
+            deleteLogoFile(card.logoPath)
+            deletePhotoFile(card.frontPhotoPath)
+            deletePhotoFile(card.backPhotoPath)
+        }
     }
 
     suspend fun restoreDeletedCard(card: LoyaltyCard): Long {
+        if (card.isSynced && !card.remoteId.isNullOrBlank()) {
+            clearPendingRemoteRemoval(card.remoteId)
+        }
         return dao.insertCard(card)
     }
 
@@ -147,6 +170,7 @@ class LoyaltyCardRepository(
         previouslyKnownRemoteIds: Set<String>
     ): Pair<List<LoyaltyCard>, Set<String>> {
         val localCards = dao.getAllCardsOnce()
+        val suppressedIds = getAllSuppressedRemoteIds()
         val remoteById = remoteCards.associateBy { it.id }
         val currentRemoteIds = remoteById.keys
         val localCardsToUpload = mutableListOf<LoyaltyCard>()
@@ -155,6 +179,10 @@ class LoyaltyCardRepository(
 
         // 1. Associer ou mettre à jour depuis les cartes distantes
         for (remote in remoteCards) {
+            if (remote.id in suppressedIds) {
+                // Carte supprimée ou passée en privée localement : ne jamais la réinsérer
+                continue
+            }
             val matchByRemoteId = remainingLocal.firstOrNull { it.remoteId == remote.id }
             val matchByContent = if (matchByRemoteId == null) {
                 remainingLocal.firstOrNull {
@@ -219,9 +247,12 @@ class LoyaltyCardRepository(
         for (local in remainingLocal) {
             if (!local.isSynced) continue
             val rid = local.remoteId
+            if (rid != null && rid in suppressedIds) {
+                continue
+            }
             if (rid != null && rid in previouslyKnownRemoteIds && rid !in currentRemoteIds) {
                 // Supprimée ou passée en privée sur l'autre téléphone
-                dao.deleteCard(local)
+                dao.deleteCardById(local.id)
                 deleteLogoFile(local.logoPath)
                 deletePhotoFile(local.frontPhotoPath)
                 deletePhotoFile(local.backPhotoPath)
@@ -236,15 +267,90 @@ class LoyaltyCardRepository(
             }
         }
 
-        return localCardsToUpload to currentRemoteIds
+        return localCardsToUpload to (currentRemoteIds - suppressedIds)
+    }
+
+    private suspend fun recordSyncedCardsAsPendingRemoval() {
+        val syncedIds = dao.getAllCardsOnce()
+            .filter { it.isSynced }
+            .mapNotNull { it.remoteId }
+            .filter { it.isNotBlank() }
+        if (syncedIds.isEmpty()) return
+        synchronized(prefsLock) {
+            val updated = getStringSetCopy(KEY_PENDING_REMOTE_REMOVALS).toMutableSet()
+            updated.addAll(syncedIds)
+            prefs.edit().putStringSet(KEY_PENDING_REMOTE_REMOVALS, updated).apply()
+        }
+    }
+
+    fun addPendingRemoteRemoval(remoteId: String?) {
+        if (remoteId.isNullOrBlank()) return
+        synchronized(prefsLock) {
+            val updated = getStringSetCopy(KEY_PENDING_REMOTE_REMOVALS).toMutableSet()
+            updated.add(remoteId)
+            prefs.edit().putStringSet(KEY_PENDING_REMOTE_REMOVALS, updated).apply()
+        }
+    }
+
+    fun clearPendingRemoteRemoval(remoteId: String?) {
+        if (remoteId.isNullOrBlank()) return
+        synchronized(prefsLock) {
+            val pending = getStringSetCopy(KEY_PENDING_REMOTE_REMOVALS).toMutableSet()
+            val tombstoned = getStringSetCopy(KEY_TOMBSTONED_REMOTE_REMOVALS).toMutableSet()
+            pending.remove(remoteId)
+            tombstoned.remove(remoteId)
+            prefs.edit()
+                .putStringSet(KEY_PENDING_REMOTE_REMOVALS, pending)
+                .putStringSet(KEY_TOMBSTONED_REMOTE_REMOVALS, tombstoned)
+                .apply()
+        }
+    }
+
+    fun markRemoteRemovalSynced(remoteId: String, stillPresentInRemote: Boolean) {
+        synchronized(prefsLock) {
+            val pending = getStringSetCopy(KEY_PENDING_REMOTE_REMOVALS).toMutableSet()
+            val tombstoned = getStringSetCopy(KEY_TOMBSTONED_REMOTE_REMOVALS).toMutableSet()
+            pending.remove(remoteId)
+            if (stillPresentInRemote) {
+                tombstoned.add(remoteId)
+            } else {
+                tombstoned.remove(remoteId)
+            }
+            prefs.edit()
+                .putStringSet(KEY_PENDING_REMOTE_REMOVALS, pending)
+                .putStringSet(KEY_TOMBSTONED_REMOTE_REMOVALS, tombstoned)
+                .apply()
+        }
+    }
+
+    fun pruneConfirmedRemovals(currentRemoteIds: Set<String>) {
+        synchronized(prefsLock) {
+            val tombstoned = getStringSetCopy(KEY_TOMBSTONED_REMOTE_REMOVALS)
+            val remaining = tombstoned.filterTo(mutableSetOf()) { it in currentRemoteIds }
+            if (remaining.size != tombstoned.size) {
+                prefs.edit().putStringSet(KEY_TOMBSTONED_REMOTE_REMOVALS, remaining).apply()
+            }
+        }
+    }
+
+    fun getPendingRemoteRemovals(): Set<String> =
+        synchronized(prefsLock) { getStringSetCopy(KEY_PENDING_REMOTE_REMOVALS) }
+
+    fun getAllSuppressedRemoteIds(): Set<String> =
+        synchronized(prefsLock) {
+            getStringSetCopy(KEY_PENDING_REMOTE_REMOVALS) + getStringSetCopy(KEY_TOMBSTONED_REMOTE_REMOVALS)
+        }
+
+    private fun getStringSetCopy(key: String): Set<String> {
+        return prefs.getStringSet(key, null)?.toSet() ?: emptySet()
     }
 
     fun getKnownRemoteIds(householdId: String): Set<String> {
-        return prefs.getStringSet("known_remote_$householdId", emptySet()) ?: emptySet()
+        return prefs.getStringSet("known_remote_$householdId", null)?.toSet() ?: emptySet()
     }
 
     fun saveKnownRemoteIds(householdId: String, ids: Set<String>) {
-        prefs.edit().putStringSet("known_remote_$householdId", ids).apply()
+        prefs.edit().putStringSet("known_remote_$householdId", ids.toSet()).apply()
     }
 
     fun clearKnownRemoteIds(householdId: String) {
@@ -366,6 +472,7 @@ class LoyaltyCardRepository(
     suspend fun importBackup(payload: BackupPayload, replaceExisting: Boolean): Int =
         withContext(Dispatchers.IO) {
             if (replaceExisting) {
+                recordSyncedCardsAsPendingRemoval()
                 clearAllPhotos()
                 clearAllLogos()
                 dao.deleteAllCards()
@@ -399,6 +506,11 @@ class LoyaltyCardRepository(
                 }
             }
             if (cardsToInsert.isNotEmpty()) {
+                cardsToInsert.forEach { card ->
+                    if (card.isSynced && !card.remoteId.isNullOrBlank()) {
+                        clearPendingRemoteRemoval(card.remoteId)
+                    }
+                }
                 dao.insertCards(cardsToInsert)
             }
             prefs.edit().putBoolean("demo_seeded_v1", true).apply()
@@ -473,5 +585,11 @@ class LoyaltyCardRepository(
             FileOutputStream(destFile).use { it.write(bytes) }
             destFile.absolutePath
         }.getOrNull()
+    }
+
+    companion object {
+        private val prefsLock = Any()
+        private const val KEY_PENDING_REMOTE_REMOVALS = "pending_remote_removals"
+        private const val KEY_TOMBSTONED_REMOTE_REMOVALS = "tombstoned_remote_removals"
     }
 }

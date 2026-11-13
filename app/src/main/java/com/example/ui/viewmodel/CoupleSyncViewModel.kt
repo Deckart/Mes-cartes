@@ -172,43 +172,59 @@ class CoupleSyncViewModel(
         localCards: List<LoyaltyCard>
     ) = syncMutex.withLock {
         val householdId = household.id
-        val pendingDeletions = PendingSyncStore.consumePendingDeletions(localRepo, householdId)
+        val remoteIds = remoteCards.mapTo(mutableSetOf()) { it.id }
 
-        // 1. Supprimer dans Firestore les cartes supprimées ou passées en privées localement
-        for (remoteId in pendingDeletions) {
-            syncRepo.deleteSharedCard(householdId, remoteId)
+        // 1. Nettoyer les suppressions déjà confirmées disparues du snapshot Firestore
+        localRepo.pruneConfirmedRemovals(remoteIds)
+
+        // 2. Supprimer dans Firestore les cartes supprimées ou passées en privées localement
+        val pendingRemovals = localRepo.getPendingRemoteRemovals()
+        for (remoteId in pendingRemovals) {
+            val deleteResult = syncRepo.deleteSharedCard(householdId, remoteId)
+            if (deleteResult.isSuccess) {
+                localRepo.markRemoteRemovalSynced(
+                    remoteId = remoteId,
+                    stillPresentInRemote = remoteId in remoteIds
+                )
+            }
         }
 
+        val suppressedIds = localRepo.getAllSuppressedRemoteIds()
         val knownIds = localRepo.getKnownRemoteIds(householdId)
         val (toUpload, latestRemoteIds) = localRepo.mergeRemoteSnapshot(
             remoteCards = remoteCards,
             previouslyKnownRemoteIds = knownIds
         )
 
-        // 2. Pousser les cartes locales synchronisées absentes ou plus récentes
+        // 3. Pousser les cartes locales synchronisées absentes ou plus récentes
         val extraLocalToPush = localCards.filter { card ->
             card.isSynced && (
                 card.remoteId == null ||
-                    remoteCards.none { it.id == card.remoteId }
+                    (card.remoteId !in suppressedIds && remoteCards.none { it.id == card.remoteId })
                 )
         }
         val combinedToUpload = (toUpload + extraLocalToPush)
             .distinctBy { it.id to it.remoteId }
-            .filter { it.remoteId == null || it.remoteId !in pendingDeletions }
+            .filter { it.remoteId == null || it.remoteId !in suppressedIds }
 
         for (card in combinedToUpload) {
-            val rid = card.remoteId ?: localRepo.generateRemoteId().also { newId ->
-                localRepo.upsertCard(card.copy(remoteId = newId))
+            // Vérifier en base qu'elle n'a pas été supprimée pendant le cycle
+            val liveCard = if (card.id != 0L) localRepo.getCardById(card.id) else card
+            if (liveCard == null || !liveCard.isSynced) continue
+            if (liveCard.remoteId != null && liveCard.remoteId in localRepo.getAllSuppressedRemoteIds()) continue
+
+            val rid = liveCard.remoteId ?: localRepo.generateRemoteId().also { newId ->
+                localRepo.upsertCard(liveCard.copy(remoteId = newId))
             }
             syncRepo.upsertSharedCard(
                 householdId = householdId,
                 remoteId = rid,
                 memberUids = household.memberUids,
-                card = card.copy(remoteId = rid)
+                card = liveCard.copy(remoteId = rid)
             )
         }
 
-        val updatedKnownIds = (latestRemoteIds + combinedToUpload.mapNotNull { it.remoteId }) - pendingDeletions
+        val updatedKnownIds = (latestRemoteIds + combinedToUpload.mapNotNull { it.remoteId }) - suppressedIds
         localRepo.saveKnownRemoteIds(householdId, updatedKnownIds)
         onLocalDataUpdated()
     }
@@ -292,30 +308,5 @@ class CoupleSyncViewModel(
                 ) as T
             }
         }
-    }
-}
-
-object PendingSyncStore {
-    private val pendingRemovals = mutableSetOf<String>()
-
-    @Synchronized
-    fun markRemovedOrPrivatized(remoteId: String?) {
-        if (!remoteId.isNullOrBlank()) {
-            pendingRemovals.add(remoteId)
-        }
-    }
-
-    @Synchronized
-    fun unmarkRemoved(remoteId: String?) {
-        if (!remoteId.isNullOrBlank()) {
-            pendingRemovals.remove(remoteId)
-        }
-    }
-
-    @Synchronized
-    fun consumePendingDeletions(localRepo: LoyaltyCardRepository, householdId: String): Set<String> {
-        val copy = pendingRemovals.toSet()
-        pendingRemovals.clear()
-        return copy
     }
 }

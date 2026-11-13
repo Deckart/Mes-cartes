@@ -14,6 +14,7 @@ import com.example.data.sync.SharedLoyaltyCard
 import com.example.model.BarcodeFormatType
 import com.example.model.CardCategory
 import com.example.model.LoyaltyCard
+import com.example.ui.components.isStoreNameConfirmationMatch
 import com.example.util.BarcodeGenerator
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
@@ -192,5 +193,108 @@ class ExampleRobolectricTest {
             customDomain = "https://www.boutique-locale.fr/fidelite"
         )
         assertEquals("boutique-locale.fr", custom.first())
+    }
+
+    @Test
+    fun `deleted synced card does not reappear during stale remote snapshot`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            val repo = LoyaltyCardRepository(context, db.loyaltyCardDao())
+            val insertedId = repo.upsertCard(
+                LoyaltyCard(
+                    storeName = "Sephora",
+                    barcodeValue = "3268840001046",
+                    barcodeFormat = BarcodeFormatType.EAN_13,
+                    colorArgb = 0xFF111827L,
+                    category = CardCategory.BEAUTE,
+                    isSynced = true,
+                    remoteId = "card_to_delete"
+                )
+            )
+            val savedCard = repo.getCardById(insertedId)!!
+
+            // Suppression locale de la carte synchronisée
+            repo.deleteCard(savedCard)
+            assertEquals(0, repo.getAllCardsOnce().size)
+            assertTrue("card_to_delete" in repo.getPendingRemoteRemovals())
+
+            // Un snapshot Firestore encore non mis à jour contient toujours card_to_delete
+            val staleRemote = SharedLoyaltyCard(
+                id = "card_to_delete",
+                ownerId = "me_uid",
+                memberUids = listOf("me_uid"),
+                storeName = "Sephora",
+                barcodeValue = "3268840001046",
+                barcodeFormat = BarcodeFormatType.EAN_13.name,
+                colorArgb = 0xFF111827L,
+                category = CardCategory.BEAUTE.name,
+                clientUpdatedAt = System.currentTimeMillis() + 5_000L
+            )
+
+            val (toUpload, knownAfter) = repo.mergeRemoteSnapshot(
+                remoteCards = listOf(staleRemote),
+                previouslyKnownRemoteIds = setOf("card_to_delete")
+            )
+
+            // La carte ne doit NI réapparaître en local NI être ré-uploadée
+            assertTrue(repo.getAllCardsOnce().isEmpty())
+            assertTrue(toUpload.isEmpty())
+            assertFalse("card_to_delete" in knownAfter)
+
+            // Même après confirmation Firestore tant que le snapshot local est en retard
+            repo.markRemoteRemovalSynced("card_to_delete", stillPresentInRemote = true)
+            repo.mergeRemoteSnapshot(
+                remoteCards = listOf(staleRemote),
+                previouslyKnownRemoteIds = emptySet()
+            )
+            assertTrue(repo.getAllCardsOnce().isEmpty())
+
+            // Une fois disparue de Firestore, la tombe est nettoyée
+            repo.pruneConfirmedRemovals(emptySet())
+            assertTrue(repo.getAllSuppressedRemoteIds().isEmpty())
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `clearAllCards marks synced cards as pending remote deletion`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            val repo = LoyaltyCardRepository(context, db.loyaltyCardDao())
+            repo.upsertCard(
+                LoyaltyCard(
+                    storeName = "Carrefour",
+                    barcodeValue = "4006381333931",
+                    barcodeFormat = BarcodeFormatType.EAN_13,
+                    colorArgb = 0xFF1D4ED8L,
+                    category = CardCategory.ALIMENTATION,
+                    isSynced = true,
+                    remoteId = "card_clear_all_1"
+                )
+            )
+            repo.clearAllCards()
+
+            assertTrue(repo.getAllCardsOnce().isEmpty())
+            assertTrue("card_clear_all_1" in repo.getPendingRemoteRemovals())
+            repo.clearPendingRemoteRemoval("card_clear_all_1")
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `store name confirmation matching handles case and surrounding spaces safely`() {
+        assertTrue(isStoreNameConfirmationMatch("E.Leclerc", "E.Leclerc"))
+        assertTrue(isStoreNameConfirmationMatch("E.Leclerc", "  e.leclerc "))
+        assertFalse(isStoreNameConfirmationMatch("E.Leclerc", ""))
+        assertFalse(isStoreNameConfirmationMatch("E.Leclerc", "Leclerc"))
+        assertFalse(isStoreNameConfirmationMatch("Carrefour", "Auchan"))
     }
 }
