@@ -1,0 +1,6 @@
+{
+  "name": "Mes Cartes",
+  "description": "Portefeuille numérique hors connexion pour rassembler toutes vos cartes de fidélité et de magasin avec affichage plein écran à la caisse.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

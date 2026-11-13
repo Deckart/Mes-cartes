@@ -1,0 +1,144 @@
+{
+  "entities": {
+    "UserSyncProfile": {
+      "title": "UserSyncProfile",
+      "description": "Profil de synchronisation d'un utilisateur associant son compte à un espace foyer partagé.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Identifiant Firebase Auth de l'utilisateur"
+        },
+        "householdId": {
+          "type": "string",
+          "description": "Code de l'espace partagé actif (chaîne vide si aucun)"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Horodatage serveur à la création (FieldValue.serverTimestamp())"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Horodatage serveur de dernière mise à jour (FieldValue.serverTimestamp())"
+        }
+      },
+      "required": ["userId", "householdId", "createdAt", "updatedAt"]
+    },
+    "Household": {
+      "title": "Household",
+      "description": "Espace de portefeuille partagé entre deux téléphones (couple).",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "description": "UID du créateur de l'espace"
+        },
+        "joinCode": {
+          "type": "string",
+          "description": "Code d'invitation identique à l'identifiant du document"
+        },
+        "name": {
+          "type": "string",
+          "description": "Nom de l'espace partagé"
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Liste bornée (max 4) des UIDs autorisés dans l'espace"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Horodatage serveur à la création (FieldValue.serverTimestamp())"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Horodatage serveur de dernière mise à jour (FieldValue.serverTimestamp())"
+        }
+      },
+      "required": ["ownerUid", "joinCode", "name", "memberUids", "createdAt", "updatedAt"]
+    },
+    "SharedLoyaltyCard": {
+      "title": "SharedLoyaltyCard",
+      "description": "Carte de fidélité synchronisée entre les membres de l'espace partagé.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID du créateur initial de la carte"
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "UIDs des membres du foyer autorisés à lire et modifier la carte"
+        },
+        "storeName": {
+          "type": "string",
+          "description": "Nom de l'enseigne"
+        },
+        "barcodeValue": {
+          "type": "string",
+          "description": "Valeur du code-barres"
+        },
+        "barcodeFormat": {
+          "type": "string",
+          "description": "Format du code-barres (enum BarcodeFormatType)"
+        },
+        "colorArgb": {
+          "type": "integer",
+          "description": "Couleur ARGB de la carte"
+        },
+        "category": {
+          "type": "string",
+          "description": "Catégorie de l'enseigne (enum CardCategory)"
+        },
+        "note": {
+          "type": "string",
+          "description": "Note facultative"
+        },
+        "clientUpdatedAt": {
+          "type": "integer",
+          "description": "Horodatage client (epoch ms) pour la résolution de conflits"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Horodatage serveur à la création (FieldValue.serverTimestamp())"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Horodatage serveur de dernière mise à jour (FieldValue.serverTimestamp())"
+        }
+      },
+      "required": [
+        "ownerId",
+        "memberUids",
+        "storeName",
+        "barcodeValue",
+        "barcodeFormat",
+        "colorArgb",
+        "category",
+        "note",
+        "clientUpdatedAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserSyncProfile" },
+      "description": "Profil utilisateur reliant un compte Google à son espace couple actif."
+    },
+    "/households/{householdId}": {
+      "schema": { "$ref": "#/entities/Household" },
+      "description": "Espace partagé de synchronisation pour un couple."
+    },
+    "/households/{householdId}/cards/{cardId}": {
+      "schema": { "$ref": "#/entities/SharedLoyaltyCard" },
+      "description": "Cartes de fidélité synchronisées (les cartes marquées privées ne sont jamais écrites ici)."
+    }
+  }
+}

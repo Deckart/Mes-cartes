@@ -1,0 +1,221 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Filet de sécurité global : tout est refusé par défaut
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUserSyncProfile(data) {
+      return data.userId is string &&
+             data.userId.size() >= 1 &&
+             data.userId.size() <= 128 &&
+             data.householdId is string &&
+             data.householdId.size() <= 64 &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidHousehold(data) {
+      return data.ownerUid is string &&
+             data.ownerUid.size() >= 1 &&
+             data.ownerUid.size() <= 128 &&
+             data.joinCode is string &&
+             data.joinCode.size() >= 4 &&
+             data.joinCode.size() <= 32 &&
+             data.joinCode.matches('^[a-zA-Z0-9_\\-]+$') &&
+             data.name is string &&
+             data.name.size() >= 1 &&
+             data.name.size() <= 60 &&
+             data.memberUids is list &&
+             data.memberUids.size() >= 1 &&
+             data.memberUids.size() <= 4 &&
+             data.memberUids[0] is string &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidSharedCard(data) {
+      return data.ownerId is string &&
+             data.ownerId.size() >= 1 &&
+             data.ownerId.size() <= 128 &&
+             data.memberUids is list &&
+             data.memberUids.size() >= 1 &&
+             data.memberUids.size() <= 4 &&
+             data.memberUids[0] is string &&
+             data.storeName is string &&
+             data.storeName.size() >= 1 &&
+             data.storeName.size() <= 100 &&
+             data.barcodeValue is string &&
+             data.barcodeValue.size() >= 1 &&
+             data.barcodeValue.size() <= 256 &&
+             data.barcodeFormat is string &&
+             data.barcodeFormat.size() >= 1 &&
+             data.barcodeFormat.size() <= 32 &&
+             data.colorArgb is int &&
+             data.category is string &&
+             data.category.size() >= 1 &&
+             data.category.size() <= 32 &&
+             data.note is string &&
+             data.note.size() <= 500 &&
+             data.clientUpdatedAt is int &&
+             data.clientUpdatedAt >= 0 &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    // 1. Profil utilisateur (isolation stricte par UID)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'householdId', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'householdId', 'createdAt', 'updatedAt']) &&
+                       isValidUserSyncProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       isValidUserSyncProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['householdId', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    // 2. Espace partagé du couple
+    match /households/{householdId} {
+      allow get: if isSignedIn() &&
+                    isValidId(householdId) &&
+                    request.auth.uid in existing().memberUids;
+
+      allow list: if isSignedIn() &&
+                     request.auth.uid in resource.data.memberUids;
+
+      allow create: if isSignedIn() &&
+                       isValidId(householdId) &&
+                       isValidHousehold(incoming()) &&
+                       incoming().ownerUid == request.auth.uid &&
+                       incoming().joinCode == householdId &&
+                       incoming().memberUids.size() == 1 &&
+                       request.auth.uid in incoming().memberUids &&
+                       incoming().keys().hasAll(['ownerUid', 'joinCode', 'name', 'memberUids', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['ownerUid', 'joinCode', 'name', 'memberUids', 'createdAt', 'updatedAt']);
+
+      allow update: if isSignedIn() &&
+                       isValidId(householdId) &&
+                       isValidHousehold(incoming()) &&
+                       incoming().ownerUid == existing().ownerUid &&
+                       incoming().joinCode == existing().joinCode &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         // Action 1 : Rejoindre l'espace avec le code secret du foyer
+                         (
+                           !(request.auth.uid in existing().memberUids) &&
+                           existing().memberUids.size() < 4 &&
+                           incoming().memberUids.size() == existing().memberUids.size() + 1 &&
+                           incoming().memberUids.hasAll(existing().memberUids) &&
+                           request.auth.uid in incoming().memberUids &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+                         ) ||
+                         // Action 2 : Quitter l'espace partagé
+                         (
+                           request.auth.uid in existing().memberUids &&
+                           !(request.auth.uid in incoming().memberUids) &&
+                           incoming().memberUids.size() == existing().memberUids.size() - 1 &&
+                           existing().memberUids.hasAll(incoming().memberUids) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+                         ) ||
+                         // Action 3 : Renommer l'espace partagé (membre uniquement)
+                         (
+                           request.auth.uid in existing().memberUids &&
+                           incoming().memberUids == existing().memberUids &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt'])
+                         )
+                       );
+
+      allow delete: if isSignedIn() &&
+                       isValidId(householdId) &&
+                       request.auth.uid == existing().ownerUid;
+
+      // 3. Cartes synchronisées du foyer
+      match /cards/{cardId} {
+        allow get: if isSignedIn() &&
+                      isValidId(householdId) &&
+                      isValidId(cardId) &&
+                      request.auth.uid in existing().memberUids;
+
+        allow list: if isSignedIn() &&
+                       request.auth.uid in resource.data.memberUids;
+
+        allow create: if isSignedIn() &&
+                         isValidId(householdId) &&
+                         isValidId(cardId) &&
+                         isValidSharedCard(incoming()) &&
+                         incoming().ownerId == request.auth.uid &&
+                         request.auth.uid in incoming().memberUids &&
+                         incoming().keys().hasAll([
+                           'ownerId', 'memberUids', 'storeName', 'barcodeValue',
+                           'barcodeFormat', 'colorArgb', 'category', 'note',
+                           'clientUpdatedAt', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'ownerId', 'memberUids', 'storeName', 'barcodeValue',
+                           'barcodeFormat', 'colorArgb', 'category', 'note',
+                           'clientUpdatedAt', 'createdAt', 'updatedAt'
+                         ]) &&
+                         exists(/databases/$(database)/documents/households/$(householdId)) &&
+                         request.auth.uid in get(/databases/$(database)/documents/households/$(householdId)).data.memberUids;
+
+        allow update: if isSignedIn() &&
+                         isValidId(householdId) &&
+                         isValidId(cardId) &&
+                         isValidSharedCard(incoming()) &&
+                         request.auth.uid in existing().memberUids &&
+                         request.auth.uid in incoming().memberUids &&
+                         incoming().ownerId == existing().ownerId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'storeName', 'barcodeValue', 'barcodeFormat', 'colorArgb',
+                           'category', 'note', 'clientUpdatedAt', 'memberUids', 'updatedAt'
+                         ]) &&
+                         exists(/databases/$(database)/documents/households/$(householdId)) &&
+                         request.auth.uid in get(/databases/$(database)/documents/households/$(householdId)).data.memberUids;
+
+        allow delete: if isSignedIn() &&
+                         isValidId(householdId) &&
+                         isValidId(cardId) &&
+                         request.auth.uid in existing().memberUids;
+      }
+    }
+  }
+}
