@@ -215,18 +215,18 @@ fun CheckoutCardScreen(
         val isLandscape = maxWidth > maxHeight
 
         if (isLandscape) {
-            // Mode paysage plein écran : code-barres géant très contrasté
-            Box(
+            // Mode paysage plein écran : code-barres géant très contrasté sans chevauchement
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.White)
                     .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .padding(horizontal = 24.dp, vertical = 14.dp)
+                    .padding(horizontal = 24.dp, vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -280,20 +280,26 @@ fun CheckoutCardScreen(
                     }
                 }
 
-                with(sharedTransitionScope) {
-                    HighContrastBarcodeCard(
-                        barcodeValue = card.barcodeValue,
-                        formatType = card.barcodeFormat,
-                        isLandscapeFullscreen = true,
-                        onCopyNumber = ::copyBarcodeToClipboard,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .widthIn(max = 760.dp)
-                            .sharedBounds(
-                                sharedContentState = rememberSharedContentState(key = "card_${card.id}"),
-                                animatedVisibilityScope = animatedVisibilityScope
-                            )
-                    )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    with(sharedTransitionScope) {
+                        HighContrastBarcodeCard(
+                            barcodeValue = card.barcodeValue,
+                            formatType = card.barcodeFormat,
+                            isLandscapeFullscreen = true,
+                            onCopyNumber = ::copyBarcodeToClipboard,
+                            modifier = Modifier
+                                .widthIn(max = 760.dp)
+                                .sharedBounds(
+                                    sharedContentState = rememberSharedContentState(key = "card_${card.id}"),
+                                    animatedVisibilityScope = animatedVisibilityScope
+                                )
+                        )
+                    }
                 }
             }
         } else {

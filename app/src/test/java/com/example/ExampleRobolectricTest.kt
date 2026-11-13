@@ -61,6 +61,19 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun `long uuid qr code generates square bitmap without fallback`() {
+        val result = BarcodeGenerator.generateBarcodeBitmap(
+            content = "0DF7F98C-A0A0-4427-9186-50a5ee48cb00",
+            formatType = BarcodeFormatType.QR_CODE,
+            widthPx = 600,
+            heightPx = 600
+        )
+        assertNotNull(result.bitmap)
+        assertFalse(result.usedFallbackCode128)
+        assertEquals(result.bitmap!!.width, result.bitmap!!.height)
+    }
+
+    @Test
     fun `invalid ean13 falls back cleanly to code128`() {
         val result = BarcodeGenerator.generateBarcodeBitmap(
             content = "1234567890120", // invalid check digit

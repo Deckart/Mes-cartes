@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,6 +27,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
@@ -65,95 +65,122 @@ fun HighContrastBarcodeCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
-                    horizontal = if (isLandscapeFullscreen) 28.dp else 20.dp,
-                    vertical = if (isLandscapeFullscreen) 18.dp else 24.dp
+                    horizontal = if (isLandscapeFullscreen) 24.dp else 20.dp,
+                    vertical = if (isLandscapeFullscreen) 14.dp else 24.dp
                 ),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             BoxWithConstraints(
                 modifier = Modifier
-                    .fillMaxWidth()
                     .then(
-                        if (formatType.is2D) {
-                            Modifier
-                                .height(if (isLandscapeFullscreen) 200.dp else 230.dp)
-                                .aspectRatio(1f)
-                        } else {
-                            Modifier.height(if (isLandscapeFullscreen) 170.dp else 138.dp)
-                        }
-                    ),
+                        if (isLandscapeFullscreen) Modifier.weight(1f, fill = false)
+                        else Modifier
+                    )
+                    .fillMaxWidth(),
                 contentAlignment = Alignment.Center
             ) {
-                val density = LocalDensity.current
-                val targetWidthPx = with(density) { maxWidth.roundToPx() }.coerceIn(240, 1400)
-                val targetHeightPx = with(density) { maxHeight.roundToPx() }.coerceIn(180, 900)
-
-                val renderResultState = produceState(
-                    initialValue = BarcodeRenderResult(null),
-                    key1 = barcodeValue,
-                    key2 = formatType,
-                    key3 = targetWidthPx to targetHeightPx
-                ) {
-                    value = withContext(Dispatchers.Default) {
-                        BarcodeGenerator.generateBarcodeBitmap(
-                            content = barcodeValue,
-                            formatType = formatType,
-                            widthPx = targetWidthPx,
-                            heightPx = targetHeightPx
-                        )
-                    }
-                }
-
-                val bitmap: Bitmap? = renderResultState.value.bitmap
-                if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Code-barres $barcodeValue",
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color.White),
-                        contentScale = if (formatType.is2D) ContentScale.Fit else ContentScale.FillBounds,
-                        filterQuality = FilterQuality.None
-                    )
+                val availableHeight = if (maxHeight != Dp.Infinity) {
+                    maxHeight
                 } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color(0xFFF3F4F6), RoundedCornerShape(12.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Numéro non encodable en code-barres",
-                            color = Color(0xFF4B5563),
-                            style = MaterialTheme.typography.bodyMedium,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(16.dp)
-                        )
-                    }
+                    if (isLandscapeFullscreen) 200.dp else 230.dp
                 }
 
-                if (renderResultState.value.usedFallbackCode128) {
-                    Surface(
-                        color = Color(0xFFFEF3C7),
-                        shape = RoundedCornerShape(50),
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(4.dp)
+                val codeBoxModifier = if (formatType.is2D) {
+                    val maxAllowedSide = if (isLandscapeFullscreen) 260.dp else 220.dp
+                    val side = minOf(maxWidth, availableHeight, maxAllowedSide).coerceAtLeast(96.dp)
+                    Modifier
+                        .size(side)
+                        .clipToBounds()
+                } else {
+                    val barHeight = if (isLandscapeFullscreen) {
+                        minOf(availableHeight, 180.dp).coerceAtLeast(88.dp)
+                    } else {
+                        138.dp
+                    }
+                    Modifier
+                        .fillMaxWidth()
+                        .height(barHeight)
+                        .clipToBounds()
+                }
+
+                BoxWithConstraints(
+                    modifier = codeBoxModifier,
+                    contentAlignment = Alignment.Center
+                ) {
+                    val density = LocalDensity.current
+                    val rawWidthPx = with(density) { maxWidth.roundToPx() }.coerceIn(240, 1400)
+                    val rawHeightPx = with(density) { maxHeight.roundToPx() }.coerceIn(180, 1400)
+                    val targetWidthPx = if (formatType.is2D) minOf(rawWidthPx, rawHeightPx) else rawWidthPx
+                    val targetHeightPx = if (formatType.is2D) targetWidthPx else rawHeightPx
+
+                    val renderResultState = produceState(
+                        initialValue = BarcodeRenderResult(null),
+                        key1 = barcodeValue,
+                        key2 = formatType,
+                        key3 = targetWidthPx to targetHeightPx
                     ) {
-                        Text(
-                            text = "Affiché en Code 128",
-                            color = Color(0xFF92400E),
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        value = withContext(Dispatchers.Default) {
+                            BarcodeGenerator.generateBarcodeBitmap(
+                                content = barcodeValue,
+                                formatType = formatType,
+                                widthPx = targetWidthPx,
+                                heightPx = targetHeightPx
+                            )
+                        }
+                    }
+
+                    val bitmap: Bitmap? = renderResultState.value.bitmap
+                    if (bitmap != null) {
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = "Code-barres $barcodeValue",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.White),
+                            contentScale = if (formatType.is2D) ContentScale.Fit else ContentScale.FillBounds,
+                            filterQuality = FilterQuality.None
                         )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color(0xFFF3F4F6), RoundedCornerShape(12.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Numéro non encodable en code-barres",
+                                color = Color(0xFF4B5563),
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
+                    }
+
+                    if (renderResultState.value.usedFallbackCode128) {
+                        Surface(
+                            color = Color(0xFFFEF3C7),
+                            shape = RoundedCornerShape(50),
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(4.dp)
+                        ) {
+                            Text(
+                                text = "Affiché en Code 128",
+                                color = Color(0xFF92400E),
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(if (isLandscapeFullscreen) 12.dp else 16.dp))
+            Spacer(modifier = Modifier.height(if (isLandscapeFullscreen) 10.dp else 16.dp))
 
             val formattedNumber = BarcodeGenerator.formatReadableNumber(barcodeValue, formatType)
+            val isLongValue = formattedNumber.length > 22
             Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
@@ -175,9 +202,15 @@ fun HighContrastBarcodeCard(
                     color = Color.Black,
                     fontFamily = JetBrainsMonoFontFamily,
                     fontWeight = FontWeight.Bold,
-                    fontSize = if (isLandscapeFullscreen) 24.sp else 21.sp,
-                    letterSpacing = 1.2.sp,
-                    textAlign = TextAlign.Center
+                    fontSize = when {
+                        isLandscapeFullscreen && isLongValue -> 17.sp
+                        isLandscapeFullscreen -> 24.sp
+                        isLongValue -> 15.sp
+                        else -> 21.sp
+                    },
+                    letterSpacing = if (isLongValue) 0.4.sp else 1.2.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
                 if (onCopyNumber != null) {
                     Icon(
@@ -204,9 +237,17 @@ fun HighContrastBarcodeCard(
 fun MiniBarcodePreview(
     barcodeValue: String,
     formatType: BarcodeFormatType,
-    height: Dp = 64.dp,
+    height: Dp = Dp.Unspecified,
     modifier: Modifier = Modifier
 ) {
+    val resolvedHeight = if (height != Dp.Unspecified) {
+        height
+    } else if (formatType.is2D) {
+        104.dp
+    } else {
+        64.dp
+    }
+
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
@@ -217,25 +258,27 @@ fun MiniBarcodePreview(
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(height)
+                .height(resolvedHeight)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             contentAlignment = Alignment.Center
         ) {
             val density = LocalDensity.current
             val widthPx = with(density) { maxWidth.roundToPx() }.coerceIn(180, 900)
             val heightPx = with(density) { maxHeight.roundToPx() }.coerceIn(80, 400)
+            val squarePx = minOf(widthPx, heightPx)
 
             val result = produceState(
                 initialValue = BarcodeRenderResult(null),
                 key1 = barcodeValue,
-                key2 = formatType
+                key2 = formatType,
+                key3 = if (formatType.is2D) squarePx else widthPx
             ) {
                 value = withContext(Dispatchers.Default) {
                     BarcodeGenerator.generateBarcodeBitmap(
                         content = barcodeValue,
                         formatType = formatType,
-                        widthPx = if (formatType.is2D) heightPx else widthPx,
-                        heightPx = heightPx
+                        widthPx = if (formatType.is2D) squarePx else widthPx,
+                        heightPx = if (formatType.is2D) squarePx else heightPx
                     )
                 }
             }
@@ -245,7 +288,11 @@ fun MiniBarcodePreview(
                 Image(
                     bitmap = bmp.asImageBitmap(),
                     contentDescription = "Aperçu du code-barres",
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = if (formatType.is2D) {
+                        Modifier.size(minOf(maxWidth, maxHeight))
+                    } else {
+                        Modifier.fillMaxSize()
+                    },
                     contentScale = ContentScale.Fit,
                     filterQuality = FilterQuality.None
                 )

@@ -19,14 +19,20 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -302,6 +308,35 @@ fun AddEditCardScreen(
         photoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
     }
 
+    fun submitSave() {
+        val cleanName = storeName.trim()
+        val cleanCode = barcodeValue.trim()
+        storeNameError = cleanName.isEmpty()
+        barcodeError = cleanCode.isEmpty()
+        if (!storeNameError && !barcodeError) {
+            val now = System.currentTimeMillis()
+            val targetCard = LoyaltyCard(
+                id = existingCard?.id ?: 0L,
+                storeName = cleanName,
+                barcodeValue = cleanCode,
+                barcodeFormat = barcodeFormat,
+                colorArgb = selectedColorArgb,
+                category = selectedCategory,
+                note = note.trim(),
+                logoPath = logoPath,
+                frontPhotoPath = frontPhotoPath,
+                backPhotoPath = backPhotoPath,
+                usageCount = existingCard?.usageCount ?: 0,
+                lastUsedAt = existingCard?.lastUsedAt ?: 0L,
+                createdAt = existingCard?.createdAt ?: now,
+                updatedAt = now,
+                isSynced = isSynced,
+                remoteId = existingCard?.remoteId
+            )
+            viewModel.saveCard(targetCard, onSaved = onSaved)
+        }
+    }
+
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
@@ -324,6 +359,15 @@ fun AddEditCardScreen(
                     }
                 },
                 actions = {
+                    TextButton(
+                        onClick = { submitSave() },
+                        modifier = Modifier.testTag("top_save_card_button")
+                    ) {
+                        Text(
+                            text = if (editingCardId == null) "Enregistrer" else "Valider",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     if (existingCard != null) {
                         IconButton(
                             onClick = { showDeleteConfirm = true },
@@ -347,42 +391,20 @@ fun AddEditCardScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                        .windowInsetsPadding(
+                            WindowInsets.navigationBars
+                                .union(WindowInsets.displayCutout)
+                                .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
+                        )
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Button(
-                        onClick = {
-                            val cleanName = storeName.trim()
-                            val cleanCode = barcodeValue.trim()
-                            storeNameError = cleanName.isEmpty()
-                            barcodeError = cleanCode.isEmpty()
-                            if (!storeNameError && !barcodeError) {
-                                val now = System.currentTimeMillis()
-                                val targetCard = LoyaltyCard(
-                                    id = existingCard?.id ?: 0L,
-                                    storeName = cleanName,
-                                    barcodeValue = cleanCode,
-                                    barcodeFormat = barcodeFormat,
-                                    colorArgb = selectedColorArgb,
-                                    category = selectedCategory,
-                                    note = note.trim(),
-                                    logoPath = logoPath,
-                                    frontPhotoPath = frontPhotoPath,
-                                    backPhotoPath = backPhotoPath,
-                                    usageCount = existingCard?.usageCount ?: 0,
-                                    lastUsedAt = existingCard?.lastUsedAt ?: 0L,
-                                    createdAt = existingCard?.createdAt ?: now,
-                                    updatedAt = now,
-                                    isSynced = isSynced,
-                                    remoteId = existingCard?.remoteId
-                                )
-                                viewModel.saveCard(targetCard, onSaved = onSaved)
-                            }
-                        },
+                        onClick = { submitSave() },
                         modifier = Modifier
                             .widthIn(max = 600.dp)
                             .fillMaxWidth()
-                            .height(54.dp)
+                            .height(50.dp)
                             .testTag("save_card_button"),
                         shape = RoundedCornerShape(16.dp)
                     ) {
